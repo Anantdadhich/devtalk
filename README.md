@@ -1,0 +1,4 @@
+-this web app is like omegle where the dev can connect with other dev.
+-there are many bugs in code not showing video of other dev after connecting  .
+-anyone who is intersted to work on this project contribute on it and contact me .
+-to run clone it on your pc.

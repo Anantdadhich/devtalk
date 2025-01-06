@@ -1,4 +1,4 @@
-import  { useEffect, useRef, useState } from 'react'
+/*import  { useEffect, useRef, useState } from 'react'
 
 import { Socket,io } from 'socket.io-client';
 
@@ -231,4 +231,217 @@ export const Rooms = ({name,localaudiotrack,localviedotrack}:Roomsprops) => {
         </div>
   )
 }
+*/
 
+import { useEffect, useRef, useState } from 'react';
+import { Socket, io } from 'socket.io-client';
+import { Loader } from 'lucide-react';
+
+type RoomsProps = {
+  name: string;
+  localAudioTrack: MediaStreamTrack | null;
+  localVideoTrack: MediaStreamTrack | null;
+}
+
+const URL = 'http://localhost:3000';
+
+const configuration = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+  ]
+};
+
+export const Rooms = ({ name, localAudioTrack, localVideoTrack }: RoomsProps) => {
+  const [lobby, setLobby] = useState(true);
+  //@ts-ignore
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [sendingPC, setSendingPC] = useState<RTCPeerConnection | null>(null);
+  const [receivingPC, setReceivingPC] = useState<RTCPeerConnection | null>(null);
+  const [remoteStream] = useState(new MediaStream());
+  
+  const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const localVideoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = remoteStream;
+    }
+  }, [remoteStream]);
+
+  useEffect(() => {
+    const socket = io(URL);
+
+    socket.on('connect', () => {
+      console.log('Connected to signaling server');
+    });
+
+    socket.on('send-offer', async ({ roomId }) => {
+      console.log('Creating and sending offer');
+      try {
+        setLobby(false);
+        const pc = new RTCPeerConnection(configuration);
+        
+
+        if (localVideoTrack) {
+          pc.addTrack(localVideoTrack);
+        }
+        if (localAudioTrack) {
+          pc.addTrack(localAudioTrack);
+        }
+
+        pc.onicecandidate = ({ candidate }) => {
+          if (candidate) {
+            socket.emit('add-ice-candidate', {
+              candidate,
+              type: 'sender',
+              roomId
+            });
+          }
+        };
+
+      
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        
+        socket.emit('offer', {
+          sdp: offer,
+          roomId
+        });
+
+        setSendingPC(pc);
+      } catch (error) {
+        console.error('Error in send-offer:', error);
+      }
+    });
+
+    socket.on('offer', async ({ roomId, sdp }) => {
+      console.log('Received offer, creating answer');
+      try {
+        setLobby(false);
+        const pc = new RTCPeerConnection(configuration);
+
+        pc.ontrack = (event) => {
+          console.log('Received track:', event.track.kind);
+          const [stream] = event.streams;
+          if (stream) {
+            if (remoteVideoRef.current) {
+              remoteVideoRef.current.srcObject = stream;
+              console.log('Set remote video stream');
+            }
+          }
+        };
+
+        pc.onicecandidate = ({ candidate }) => {
+          if (candidate) {
+            socket.emit('add-ice-candidate', {
+              candidate,
+              type: 'receiver',
+              roomId
+            });
+          }
+        };
+
+ 
+        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        socket.emit('answer', {
+          sdp: answer,
+          roomId
+        });
+
+        setReceivingPC(pc);
+      } catch (error) {
+        console.error('Error handling offer:', error);
+      }
+    });
+
+    socket.on('answer', async ({ sdp }) => {
+      console.log('Received answer');
+      try {
+        if (sendingPC) {
+          await sendingPC.setRemoteDescription(new RTCSessionDescription(sdp));
+        }
+      } catch (error) {
+        console.error('Error setting remote description:', error);
+      }
+    });
+
+    socket.on('add-ice-candidate', async ({ candidate, type }) => {
+      try {
+        const pc = type === 'sender' ? receivingPC : sendingPC;
+        if (pc && pc.remoteDescription) {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+      } catch (error) {
+        console.error('Error adding ICE candidate:', error);
+      }
+    });
+
+    socket.on('lobby', () => {
+      setLobby(true);
+    });
+
+    setSocket(socket);
+
+
+    return () => {
+      socket.disconnect();
+      sendingPC?.close();
+      receivingPC?.close();
+    };
+  }, [localAudioTrack, localVideoTrack]);
+
+
+  useEffect(() => {
+    if (localVideoRef.current && localVideoTrack) {
+      const stream = new MediaStream([localVideoTrack]);
+      if (localAudioTrack) {
+        stream.addTrack(localAudioTrack);
+      }
+      localVideoRef.current.srcObject = stream;
+    }
+  }, [localVideoTrack, localAudioTrack]);
+
+  return (
+    <div className="p-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="relative">
+          <video
+            ref={localVideoRef}
+            autoPlay
+            playsInline
+            muted
+            className="w-full aspect-video bg-gray-800 rounded-lg object-cover"
+          />
+          <div className="absolute bottom-2 left-2 bg-black/50 px-2 py-1 rounded text-white">
+            You ({name})
+          </div>
+        </div>
+        
+        <div className="relative">
+          <video
+            ref={remoteVideoRef}
+            autoPlay
+            playsInline
+            className="w-full aspect-video bg-gray-800 rounded-lg object-cover"
+          />
+          {lobby ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-lg">
+              <div className="text-center text-white">
+                <Loader className="animate-spin h-8 w-8 mx-auto mb-2" />
+                <p>Waiting for peer...</p>
+              </div>
+            </div>
+          ) : (
+            <div className="absolute bottom-2 left-2 bg-black/50 px-2 py-1 rounded text-white">
+              Peer
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
